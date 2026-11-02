@@ -10,12 +10,12 @@ The ADC is single-channel and software-triggered. Each conversion busy-waits unt
 
 | Pin | Function |
 | --- | --- |
-| PD4 | Analog input, ADC channel 7. 0 V to 3.3 V. |
+| PC4 | Analog input, ADC channel 2. 0 V to 3.3 V. |
 | PC1 | Servo signal. TIM2 CH1 after remap group 1. |
 | PD0 | Blinks 100 ms on, 100 ms off. |
 | PD1 | SWIO. Leave this for programming and debug `printf`. |
 
-Remap group 0 would put TIM2 CH1 on PD4, which is the ADC pin, so this example sets `SERVO_TIM2_REMAP` to 1. Give the servo its own supply and tie the grounds together. The signal is 3.3 V.
+PC4 is an ADC pin on every CH32V006 package, and remap group 1 does not use it for TIM2. Give the servo its own supply and tie the grounds together. The signal is 3.3 V.
 
 ## Use
 

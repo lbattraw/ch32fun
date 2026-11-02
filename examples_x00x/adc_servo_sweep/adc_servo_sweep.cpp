@@ -5,8 +5,8 @@
  * The sweep is from ch32-libraries/Servo examples/servo_sweep, on the
  * TIM2 backend (no interrupts; the timer holds the pulse).
  *
- * PD4 is ADC channel 7, and it is also TIM2 CH1 in remap group 0.
- * Remap group 1 moves CH1 to PC1 so the analog pin stays free.
+ * Remap group 1 puts TIM2 CH1 on PC1. The analog input is PC4
+ * (ADC channel 2), which is free of the servo, the PD0 blink, and SWIO.
  * 03-27-2023 E. Brombaugh (ADC)
  */
 
@@ -28,12 +28,11 @@ void adc_init( void )
 	// ADC_CLK_ADJ = 0 -- 1/2 duty cycle high level ADC clock
 	RCC->CFGR0 = (RCC->CFGR0 & ~(RCC_ADCPRE | RCC_CFGR0_ADC_CLK_MODE | RCC_CFGR0_ADC_CLK_ADJ)) | RCC_ADCPRE_DIV2;
 
-	// Enable GPIOD and ADC
-	RCC->PB2PCENR |= RCC_ADCEN | RCC_IOPDEN;
+	// Enable GPIOC and ADC. PC4 is analog input channel 2.
+	RCC->PB2PCENR |= RCC_ADCEN | RCC_IOPCEN;
 
-	// PD4 is analog input chl 7
-	GPIOD->CFGLR &= ~(GPIO_CFGLR_MASK<<(4*4));
-	GPIOD->CFGLR |= (GPIO_CFGLR_IN_ANALOG<<(4*4));
+	GPIOC->CFGLR &= ~(GPIO_CFGLR_MASK<<(4*4));
+	GPIOC->CFGLR |= (GPIO_CFGLR_IN_ANALOG<<(4*4));
 
 	// Reset the ADC to init all regs
 	RCC->PB2PRSTR |= RCC_ADC1RST;
@@ -42,14 +41,14 @@ void adc_init( void )
 	// Turn on ADC module
 	ADC1->CTLR2 |= ADC_ADON;
 
-	// Set up single conversion on chl 7
+	// Set up single conversion on channel 2 (PC4)
 	ADC1->RSQR1 = 0;
 	ADC1->RSQR2 = 0;
-	ADC1->RSQR3 = 7;	// 0-9 for 8 ext inputs and two internals
+	ADC1->RSQR3 = 2;	// 0-9 for 8 ext inputs and two internals
 
-	// set sampling time for chl 7
-	ADC1->SAMPTR2 &= ~(ADC_SMP0<<(3*7));
-	ADC1->SAMPTR2 |= 7<<(3*7);	// 0:7 => 3.5/7.5/11.5/19.5/35.5/55.5/71.5/239.5 cycles
+	// set sampling time for channel 2
+	ADC1->SAMPTR2 &= ~(ADC_SMP0<<(3*2));
+	ADC1->SAMPTR2 |= 7<<(3*2);	// 0:7 => 3.5/7.5/11.5/19.5/35.5/55.5/71.5/239.5 cycles
 
 	// set External trigger event to SWSTART
 	ADC1->CTLR2 = ADC1->CTLR2 & ~ADC_EXTSEL_SWSTART;
