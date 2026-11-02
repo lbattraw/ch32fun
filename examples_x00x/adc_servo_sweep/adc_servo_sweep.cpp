@@ -5,18 +5,18 @@
  * The sweep is from ch32-libraries/Servo examples/servo_sweep, on the
  * TIM2 backend (no interrupts; the timer holds the pulse).
  *
- * Remap group 1 puts TIM2 CH1 on PC1. The analog input is PC4
+ * Remap group 0 puts TIM2 CH1 on PD4. The analog input is PC4
  * (ADC channel 2), which is free of the servo, the PD0 blink, and SWIO.
  * 03-27-2023 E. Brombaugh (ADC)
  */
 
-#define SERVO_TIM2_REMAP 1
+#define SERVO_TIM2_REMAP 0
 
 #include "ch32fun.h"
 #include "Servo.h"
 #include <stdio.h>
 
-static_assert( SERVO_TIM2_CH1_PIN == PC1, "remap group 1 must put TIM2 CH1 on PC1" );
+static_assert( SERVO_TIM2_CH1_PIN == PD4, "remap group 0 must put TIM2 CH1 on PD4" );
 
 /*
  * initialize adc for polling
