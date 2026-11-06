@@ -1,29 +1,48 @@
 /*
- * CH32V006 ESC throttle from the adc_servo_sweep pinout.
+ * CH32V006: ESC throttle and a spindle-probe arm on two TIM2 pulses.
+ * Only one pulse is enabled at a time.
  *
- * PD4 is the ESC pulse (TIM2 CH1, remap group 0, 1000-2000 us).
- * PC4 is the analog throttle (ADC channel 2). PD0 is a status LED.
- * PD1 stays SWIO for debug printf.
+ * PD4 (TIM2 CH1) drives the ESC. Its width tracks PC4, ADC channel 2,
+ * from SERVO_MIN_US at 0 counts to SERVO_MAX_US at full scale.
+ * PD3 (TIM2 CH2) drives the probe arm.
  *
- * Startup holds minimum throttle so the ESC can arm, samples PC4 to
- * learn the stick's travel, then maps that span onto the pulse width.
+ * After the ADC stays under ADC_IDLE_PERCENT of full scale for five
+ * seconds, the ESC pulse turns off and the arm swings from minimum to
+ * maximum. When the ADC rises back above that level, the arm swings
+ * home. 1.5 seconds after it arrives, its pulse turns off and the ESC
+ * turns back on, ramping from minimum to the width the ADC asks for.
  */
 
 #include "ch32fun.h"
 #include "Servo.h"
 #include <stdio.h>
 
-static_assert( SERVO_TIM2_REMAP == 0, "ESC pulse is TIM2 CH1 in remap group 0" );
-static_assert( SERVO_TIM2_CH1_PIN == PD4, "remap group 0 must put TIM2 CH1 on PD4" );
+static_assert( SERVO_TIM2_REMAP == 0, "both pulses use TIM2 remap group 0" );
+static_assert( SERVO_TIM2_CH1_PIN == PD4, "ESC pulse is TIM2 CH1 on PD4" );
+static_assert( SERVO_TIM2_CH2_PIN == PD3, "probe arm is TIM2 CH2 on PD3" );
+static_assert( SERVO_SMOOTH == 1, "the arm and the ESC handoff ramp in the library" );
 
 #define ADC_FULL_SCALE 4095u
-#define PROBE_MIN_SPAN 64u
-#define ARM_MS         2000u
-#define PROBE_MS       3000u
-#define STEP_MS        20u
+#ifndef ADC_IDLE_PERCENT
+#define ADC_IDLE_PERCENT 5
+#endif
+#define ADC_IDLE_THRESHOLD ((ADC_FULL_SCALE * ADC_IDLE_PERCENT) / 100u)
 
-static uint16_t probe_lo = ADC_FULL_SCALE;
-static uint16_t probe_hi = 0;
+#define IDLE_HOLD_MS     5000u
+#define RETRACT_DWELL_MS 1500u
+#define STEP_MS          20u
+#define SWING_US_PER_S   1000u
+
+static_assert( ADC_IDLE_THRESHOLD > 0, "idle threshold must be at least one count" );
+
+enum Mode
+{
+	MODE_ESC,
+	MODE_EXTEND,
+	MODE_RETRACT,
+	MODE_DWELL,
+	MODE_RESUME
+};
 
 /*
  * initialize adc for polling
@@ -73,41 +92,50 @@ uint16_t adc_get( void )
 	return (uint16_t)(ADC1->RDATAR & ADC_FULL_SCALE);
 }
 
+static uint16_t adc_to_us( uint16_t adc )
+{
+	return (uint16_t)( SERVO_MIN_US +
+		(uint32_t)adc * (SERVO_MAX_US - SERVO_MIN_US) / ADC_FULL_SCALE );
+}
+
 static void led_set( int on )
 {
 	GPIOD->BSHR = on ? 1u : (1u << 16);
 }
 
-static void note_probe( uint16_t adc )
+static int adc_is_idle( uint16_t adc )
 {
-	if( adc < probe_lo ) probe_lo = adc;
-	if( adc > probe_hi ) probe_hi = adc;
+	return adc < ADC_IDLE_THRESHOLD;
 }
 
-/*
- * Map a sample onto the ESC pulse. A probe that barely moved falls back
- * to the full 12-bit range so the stick still has somewhere to go.
- */
-static uint16_t adc_to_us( uint16_t adc )
+static int adc_is_active( uint16_t adc )
 {
-	uint16_t lo = probe_lo;
-	uint16_t hi = probe_hi;
+	return adc > ADC_IDLE_THRESHOLD;
+}
 
-	if( hi < lo || (uint16_t)(hi - lo) < PROBE_MIN_SPAN )
+static void enable_esc( Servo &esc, uint16_t us, int ramp_from_min )
+{
+	if( ramp_from_min )
 	{
-		lo = 0;
-		hi = ADC_FULL_SCALE;
+		esc.setSpeed( SWING_US_PER_S );
+		esc.writeMicroseconds( SERVO_MIN_US );
+		esc.attach( SERVO_TIM2_CH1_PIN );
+		esc.writeMicroseconds( us );
 	}
-	if( adc <= lo ) return SERVO_MIN_US;
-	if( adc >= hi ) return SERVO_MAX_US;
-
-	return (uint16_t)( SERVO_MIN_US +
-		(uint32_t)(adc - lo) * (SERVO_MAX_US - SERVO_MIN_US) / (uint32_t)(hi - lo) );
+	else
+	{
+		esc.setSpeed( 0 );
+		esc.writeMicroseconds( us );
+		esc.attach( SERVO_TIM2_CH1_PIN );
+	}
 }
 
-static void step_delay( void )
+static void enable_probe( Servo &probe, uint16_t us )
 {
-	Delay_Ms( STEP_MS );
+	probe.setSpeed( SWING_US_PER_S );
+	probe.writeMicroseconds( SERVO_MIN_US );
+	probe.attach( SERVO_TIM2_CH2_PIN );
+	probe.writeMicroseconds( us );
 }
 
 /*
@@ -118,6 +146,8 @@ int main()
 	SystemInit();
 
 	printf( "\r\r\n\nesc_control_auto_probe\n\r" );
+	printf( "idle threshold %u counts (%u%%)\n\r",
+		(unsigned)ADC_IDLE_THRESHOLD, (unsigned)ADC_IDLE_PERCENT );
 
 	printf( "initializing adc..." );
 	adc_init();
@@ -125,52 +155,121 @@ int main()
 
 	RCC->APB2PCENR |= RCC_APB2Periph_GPIOD;
 
-	// GPIO D0 Push-Pull
+	// GPIO D0 Push-Pull. PD3 and PD4 are configured by the servo library.
 	GPIOD->CFGLR &= ~(0xf<<(4*0));
 	GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP)<<(4*0);
 
 	Servo esc;
-	esc.attach( SERVO_TIM2_CH1_PIN );
-	esc.writeMicroseconds( SERVO_MIN_US );
-	led_set( 1 );
+	Servo probe;
+	enable_esc( esc, adc_to_us( adc_get() ), 0 );
 
-	printf( "arming at %u us\n\r", (unsigned)SERVO_MIN_US );
-	for( uint32_t step = 0; step < ARM_MS / STEP_MS; step++ )
-	{
-		uint16_t adc = adc_get();
-		if( (step % 25u) == 0 )
-			printf( "arm adc: %u us: %u\n\r", adc, (unsigned)SERVO_MIN_US );
-		step_delay();
-	}
-
-	printf( "probing analog input, hold min throttle on the ESC\n\r" );
-	for( uint32_t step = 0; step < PROBE_MS / STEP_MS; step++ )
-	{
-		uint16_t adc = adc_get();
-		note_probe( adc );
-		led_set( (step % 10u) < 5u );
-		if( (step % 5u) == 0 )
-			printf( "probe adc: %u min: %u max: %u\n\r", adc, probe_lo, probe_hi );
-		esc.writeMicroseconds( SERVO_MIN_US );
-		step_delay();
-	}
-
-	printf( "probe done min: %u max: %u\n\r", probe_lo, probe_hi );
-	if( probe_hi < probe_lo || (uint16_t)(probe_hi - probe_lo) < PROBE_MIN_SPAN )
-		printf( "span below %u counts, control uses 0..%u\n\r",
-			(unsigned)PROBE_MIN_SPAN, (unsigned)ADC_FULL_SCALE );
-
-	printf( "running\n\r" );
+	Mode mode = MODE_ESC;
+	uint32_t low_ms = 0;
+	uint32_t dwell_ms = 0;
 	uint32_t step = 0;
+
 	while(1)
 	{
 		uint16_t adc = adc_get();
 		uint16_t us = adc_to_us( adc );
-		esc.writeMicroseconds( us );
-		led_set( (step % 50u) < 25u );
-		if( (step % 5u) == 0 )
-			printf( "run adc: %u us: %u\n\r", adc, us );
+		int report = (step % 5u) == 0;
+
+		switch( mode )
+		{
+		case MODE_ESC:
+			esc.writeMicroseconds( us );
+			led_set( 1 );
+			if( adc_is_idle( adc ) )
+			{
+				low_ms += STEP_MS;
+				if( low_ms >= IDLE_HOLD_MS )
+				{
+					esc.detach();
+					enable_probe( probe, SERVO_MAX_US );
+					low_ms = 0;
+					mode = MODE_EXTEND;
+					printf( "extend\n\r" );
+				}
+			}
+			else
+			{
+				low_ms = 0;
+			}
+			if( report )
+				printf( "esc adc: %u us: %u low: %lu\n\r", adc, us, low_ms );
+			break;
+
+		case MODE_EXTEND:
+			led_set( (step % 10u) < 5u );
+			if( adc_is_active( adc ) )
+			{
+				probe.writeMicroseconds( SERVO_MIN_US );
+				mode = MODE_RETRACT;
+				printf( "retract\n\r" );
+			}
+			if( report )
+				printf( "extend adc: %u\n\r", adc );
+			break;
+
+		case MODE_RETRACT:
+			probe.writeMicroseconds( SERVO_MIN_US );
+			led_set( (step % 10u) < 5u );
+			if( !probe.isMoving() )
+			{
+				dwell_ms = 0;
+				mode = MODE_DWELL;
+				printf( "dwell\n\r" );
+			}
+			if( report )
+				printf( "retract adc: %u\n\r", adc );
+			break;
+
+		case MODE_DWELL:
+			led_set( (step % 10u) < 5u );
+			dwell_ms += STEP_MS;
+			if( dwell_ms >= RETRACT_DWELL_MS )
+			{
+				probe.detach();
+				enable_esc( esc, us, 1 );
+				mode = MODE_RESUME;
+				printf( "resume\n\r" );
+			}
+			if( report )
+				printf( "dwell adc: %u ms: %lu\n\r", adc, dwell_ms );
+			break;
+
+		case MODE_RESUME:
+			esc.writeMicroseconds( us );
+			led_set( 1 );
+			if( !esc.isMoving() )
+			{
+				esc.setSpeed( 0 );
+				low_ms = 0;
+				mode = MODE_ESC;
+				printf( "esc\n\r" );
+			}
+			else if( adc_is_idle( adc ) )
+			{
+				low_ms += STEP_MS;
+				if( low_ms >= IDLE_HOLD_MS )
+				{
+					esc.detach();
+					enable_probe( probe, SERVO_MAX_US );
+					low_ms = 0;
+					mode = MODE_EXTEND;
+					printf( "extend\n\r" );
+				}
+			}
+			else
+			{
+				low_ms = 0;
+			}
+			if( report )
+				printf( "resume adc: %u us: %u\n\r", adc, us );
+			break;
+		}
+
 		step++;
-		step_delay();
+		Delay_Ms( STEP_MS );
 	}
 }

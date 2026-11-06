@@ -11,7 +11,7 @@ include ../../ch32fun/ch32fun.mk
 # After the include: ch32fun.mk sets CFLAGS with `?=`.
 # SERVO_TIM2_REMAP is a command-line define so Servo.cpp and this file
 # select the same TIM2 pin. No exceptions: ch32fun's libgcc has no abort.
-CFLAGS+=-I../../examples_x00x/adc_servo_sweep -DSERVO_TIM2_REMAP=0 \
+CFLAGS+=-I../../examples_x00x/adc_servo_sweep -DSERVO_TIM2_REMAP=0 -DSERVO_SMOOTH=1 \
 	-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables
 
 flash : cv_flash
