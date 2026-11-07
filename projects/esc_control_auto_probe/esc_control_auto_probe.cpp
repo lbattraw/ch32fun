@@ -100,7 +100,8 @@ static uint16_t adc_to_us( uint16_t adc )
 
 static void led_set( int on )
 {
-	GPIOD->BSHR = on ? 1u : (1u << 16);
+	// PD2. BSHR bits 0-15 set, bits 16-31 reset.
+	GPIOD->BSHR = on ? (1u << 2) : (1u << 18);
 }
 
 static int adc_is_idle( uint16_t adc )
@@ -155,9 +156,9 @@ int main()
 
 	RCC->APB2PCENR |= RCC_APB2Periph_GPIOD;
 
-	// GPIO D0 Push-Pull. PD3 and PD4 are configured by the servo library.
-	GPIOD->CFGLR &= ~(0xf<<(4*0));
-	GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP)<<(4*0);
+	// GPIO D2 Push-Pull. PD3 and PD4 are configured by the servo library.
+	GPIOD->CFGLR &= ~(0xf<<(4*2));
+	GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP)<<(4*2);
 
 	Servo esc;
 	Servo probe;

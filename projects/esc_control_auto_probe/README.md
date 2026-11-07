@@ -9,7 +9,7 @@ CH32V006 project based on `examples_x00x/adc_servo_sweep`. Two TIM2 pulses share
 | PC4 | Analog input, ADC channel 2. 0 V to 3.3 V. |
 | PD4 | ESC signal. TIM2 CH1. 1000 µs at 0 counts, 2000 µs at full scale. |
 | PD3 | Probe arm. TIM2 CH2. Swings between the same 1000 µs and 2000 µs limits. |
-| PD0 | On while the ESC pulse is enabled. Blinks 100 ms while the arm pulse is enabled. |
+| PD2 | On while the ESC pulse is enabled. Blinks 100 ms while the arm pulse is enabled. |
 | PD1 | SWIO. Leave this for programming and debug `printf`. |
 
 Give the ESC its own motor supply and tie the grounds together. Both signals are 3.3 V. Remove the propeller before the first run. The arm must be clear of the spindle at the minimum pulse.
