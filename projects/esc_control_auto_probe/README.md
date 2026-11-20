@@ -6,9 +6,15 @@ CH32V006 project based on `examples_x00x/adc_servo_sweep`. Two TIM2 pulses share
 
 | Pin | Function |
 | --- | --- |
-| PC4 | Analog input, ADC channel 2. 0 V to 3.3 V. |
+| PC4 | Throttle, ADC channel 2. 0 V to 3.3 V. |
+| PD5 | Pressure, ADC channel 5. 0 V to 3.3 V. |
 | PD4 | ESC signal. TIM2 CH1. 1000 µs at 0 counts, 2000 µs at full scale. |
 | PD3 | Probe arm. TIM2 CH2. Swings between the same 1000 µs and 2000 µs limits. |
+| PD0 | Mode. Active high, pulled down. A rising edge changes mode. |
+| PC0 | Manual discharge. Active high, pulled down. A rising edge is the request. |
+| PC1 | Pump control. Active high. |
+| PC3 | Discharge valve. Active high. |
+| PC6 | Error. Active high while a pressure fault is waiting to be cleared. |
 | PD2 | On while the ESC pulse is enabled. Blinks 100 ms while the arm pulse is enabled. |
 | PD1 | SWIO. Leave this for programming and debug `printf`. |
 
@@ -22,6 +28,18 @@ The ESC pulse follows the ADC directly. The idle level defaults to 5% of full sc
 2. The ESC pulse is then disabled and the arm swings from 1000 µs to 2000 µs at 1000 µs per second.
 3. When the ADC goes above the idle level, the arm swings back to 1000 µs at the same rate.
 4. 1.5 seconds after the arm reaches minimum, its pulse is disabled. The ESC pulse is enabled at 1000 µs and ramps, at 1000 µs per second, to the width the ADC is asking for. After that ramp, the ESC tracks the ADC on the next frame.
+
+## ATC mode
+
+Motor drive is the mode at reset. A rising edge on PD0 starts ATC from any motor-drive state.
+
+1. The ESC pulse is set to 1000 µs and held for 10 seconds. The arm pulse stays off.
+2. The ESC pulse turns off and the arm pulse is set to 2000 µs. PC1, the pump, turns on.
+3. PD5 is compared with 50% of full scale (2047 counts). `PRESSURE_PERCENT` changes that target.
+4. If the pressure gets there within 3 seconds, the pump stays on until the next rising edge on PD0. That edge turns the pump off, opens PC3 for 1 second, and returns to motor drive. The ESC ramps from 1000 µs to the throttle reading.
+5. If the pressure is still short after 3 seconds, the pump turns off, PC6 turns on, and `printf` reports `error pressure:` followed by the reading. The next rising edge on PC0 opens the valve for 1 second. The next rising edge on PD0 then clears the error and returns to motor drive the same way.
+
+A rising edge is a low sample followed by a high sample, so holding the mode pin through ATC does not immediately leave it.
 
 ## Use
 
